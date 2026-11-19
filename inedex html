@@ -1,0 +1,274 @@
+
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NOVA AI CORE</title>
+<style>
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 20px;
+  background: #07111f;
+  color: white;
+  font-family: Arial, sans-serif;
+}
+
+main {
+  max-width: 650px;
+  margin: 25px auto;
+  padding: 20px;
+  background: #10243a;
+  border: 1px solid #168ccc;
+  border-radius: 18px;
+}
+
+h1 {
+  color: #38c5ff;
+  text-align: center;
+}
+
+#status {
+  text-align: center;
+  color: #9bc9e5;
+}
+
+#chat {
+  height: 380px;
+  overflow-y: auto;
+  padding: 12px;
+  background: #071522;
+  border-radius: 12px;
+}
+
+.message {
+  padding: 12px;
+  margin: 10px 0;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.user { background: #124c78; }
+.ai { background: #193047; }
+.error { background: #63313b; }
+
+.controls {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+input {
+  min-width: 0;
+  flex: 1;
+  padding: 13px;
+  background: #071522;
+  color: white;
+  border: 1px solid #2876a5;
+  border-radius: 10px;
+}
+
+button {
+  padding: 12px 16px;
+  background: #087eb9;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+button:disabled { opacity: .5; }
+
+#clear {
+  margin-top: 12px;
+  background: #743849;
+}
+</style>
+</head>
+
+<body>
+<main>
+  <h1>◈ NOVA AI CORE</h1>
+  <p id="status">النظام جاهز</p>
+
+  <div id="chat"></div>
+
+  <div class="controls">
+    <input id="message" placeholder="اكتب رسالتك إلى NOVA...">
+    <button id="send">إرسال</button>
+  </div>
+
+  <button id="clear">مسح المحادثة</button>
+</main>
+
+<script>
+const STORAGE_KEY = "nova_history_v1";
+const chat = document.getElementById("chat");
+const input = document.getElementById("message");
+const statusBox = document.getElementById("status");
+const sendButton = document.getElementById("send");
+
+let history = [];
+let busy = false;
+
+// تحميل المحادثات المحفوظة
+function loadHistory() {
+  try {
+    const saved = JSON.parse(
+      localStorage.getItem(STORAGE_KEY) || "[]"
+    );
+
+    history = Array.isArray(saved)
+      ? saved.filter(m =>
+          m &&
+          ["user", "assistant"].includes(m.role) &&
+          typeof m.content === "string" &&
+          m.content.length <= 1500
+        ).slice(-50)
+      : [];
+
+  } catch {
+    history = [];
+  }
+
+  renderChat();
+}
+
+function saveHistory() {
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(history.slice(-50))
+    );
+  } catch {
+    statusBox.textContent = "تعذر حفظ المحادثة";
+  }
+}
+
+// عرض الرسائل
+function renderChat() {
+  chat.replaceChildren();
+
+  history.forEach(message => {
+    const item = document.createElement("div");
+
+    item.className = "message " +
+      (message.role === "user" ? "user" : "ai");
+
+    item.textContent =
+      (message.role === "user" ? "أنت: " : "NOVA: ") +
+      message.content;
+
+    chat.appendChild(item);
+  });
+
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function showError(message) {
+  const item = document.createElement("div");
+  item.className = "message error";
+  item.textContent = "خطأ: " + message;
+  chat.appendChild(item);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+// إرسال آخر 12 رسالة للخادم
+async function sendMessage() {
+  const text = input.value.trim();
+
+  if (!text || busy) return;
+
+  if (text.length > 1500) {
+    statusBox.textContent = "الرسالة طويلة جدًا";
+    return;
+  }
+
+  busy = true;
+  sendButton.disabled = true;
+  input.disabled = true;
+
+  const userMessage = {
+    role: "user",
+    content: text
+  };
+
+  history.push(userMessage);
+  renderChat();
+  input.value = "";
+
+  statusBox.textContent = "NOVA يفكر...";
+
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messages: history.slice(-12)
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.error || "تعذر الاتصال بالخادم"
+      );
+    }
+
+    if (
+      typeof data.reply !== "string" ||
+      !data.reply.trim()
+    ) {
+      throw new Error("لم تصل إجابة صالحة");
+    }
+
+    history.push({
+      role: "assistant",
+      content: data.reply
+    });
+
+    history = history.slice(-50);
+    saveHistory();
+    renderChat();
+
+    statusBox.textContent = "NOVA متصل وجاهز";
+
+  } catch (error) {
+    history.pop();
+    renderChat();
+    showError(error.message);
+    statusBox.textContent = "فشل الاتصال";
+  } finally {
+    busy = false;
+    sendButton.disabled = false;
+    input.disabled = false;
+    input.focus();
+  }
+}
+
+sendButton.addEventListener("click", sendMessage);
+
+input.addEventListener("keydown", event => {
+  if (event.key === "Enter") sendMessage();
+});
+
+// مسح الذاكرة
+document.getElementById("clear").onclick = () => {
+  if (busy) return;
+
+  history = [];
+  localStorage.removeItem(STORAGE_KEY);
+  renderChat();
+  statusBox.textContent = "تم مسح المحادثة";
+};
+
+loadHistory();
+</script>
+</body>
+</html>
